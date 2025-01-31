@@ -56,11 +56,30 @@ fi
 echo -e "\nUsing $MASTER as master and $SLAVE as slave"
 
 # Show current GTID positions
+master_gtid_current_pos=$(docker exec $MASTER mariadb -u root -p"$ROOT_PASS" -e "SELECT @@gtid_current_pos;" -s --skip-column-names)
+master_gtid_binlog_pos=$(docker exec $MASTER mariadb -u root -p"$ROOT_PASS" -e "SELECT @@gtid_binlog_pos;" -s --skip-column-names)
+slave_gtid=$(docker exec $SLAVE mariadb -u root -p"$ROOT_PASS" -e "SELECT @@gtid_current_pos;" -s --skip-column-names)
+
+# Print the current GTID positions
 echo -e "\nCurrent GTID positions:"
-echo "Master:"
-docker exec $MASTER mariadb -u root -p"$ROOT_PASS" -e "SELECT @@gtid_current_pos;"
-echo "Slave:"
-docker exec $SLAVE mariadb -u root -p"$ROOT_PASS" -e "SELECT @@gtid_current_pos;"
+echo "Master (GTID Current Pos): $master_gtid_current_pos"
+echo "Master (GTID Binlog Pos): $master_gtid_binlog_pos"
+echo "Slave: $slave_gtid"
+
+# Compare the GTID positions on the master server
+if [ "$master_gtid_current_pos" != "$master_gtid_binlog_pos" ]; then
+  echo -e "\nGTID positions on the master do not match. The script will be stopped."
+
+  # Suggest corrective actions
+  echo -e "\nSuggested steps:"
+  echo "1. Stop the replica server."
+  echo "2. On the master, run: FLUSH BINARY LOGS;"
+  echo "3. Restart the master server."
+  echo "4. Once the above steps are done, re-run this script."
+
+  # Exit the script with an error code
+  exit 1
+fi
 
 # Generate new replication password
 REPL_PASS=$(generate_password)
@@ -74,17 +93,21 @@ echo -e "\nCreating backup from master..."
 docker exec $MASTER mariadb-dump -u root -p"$ROOT_PASS" --all-databases --master-data=2 --single-transaction > /tmp/dump.sql
 
 # Extract GTID from the gtid_slave_pos table in the dump
-numbers=$(awk '/INSERT INTO `gtid_slave_pos` VALUES/ {getline; print}' /tmp/dump.sql | grep -oP '\(\K[^)]+')
-
-# Use awk to extract the 3rd and 4th numbers
-num3=$(echo "$numbers" | awk -F, '{print $3}')
-num4=$(echo "$numbers" | awk -F, '{print $4}')
-
-# Combine the numbers into a string in the format "num3-num4"
-GTID="${num3}-${num4}"
+GTID=$(grep -oP "gtid_slave_pos='\K[0-9\-]+" /tmp/dump.sql)
 
 # Print the extracted GTID
 echo "Extracted GTID: $GTID"
+
+if [[ "$gtid" =~ ^[0-9\-]+$ && -n "$gtid" ]]; then
+  echo "GTID is valid."
+else
+  echo "GTID is invalid. Check the dump file in /tmp/dump.sql for the string SET GLOBAL gtid_slave_pos. If not present:"
+  echo "1. Stop the replica server."
+  echo "2. On the master, run: FLUSH BINARY LOGS;"
+  echo "3. Restart the master server."
+  echo "4. Once the above steps are done, re-run this script."
+  exit 1
+fi
 
 # Copy dump to slave container
 echo -e "\nCopying backup to slave..."
@@ -102,21 +125,22 @@ echo -e "\nConfiguring replication user on both servers..."
 docker exec $MASTER mariadb -u root -p"$ROOT_PASS" -e "
 DROP USER IF EXISTS 'replication'@'%';
 CREATE USER 'replication'@'%' IDENTIFIED BY '$REPL_PASS';
-GRANT REPLICATION SLAVE ON *.* TO 'replication'@'%';
+GRANT REPLICATION SLAVE, SLAVE MONITOR ON *.* TO 'replication'@'%';
 FLUSH PRIVILEGES;"
 
 # On slave
 docker exec $SLAVE mariadb -u root -p"$ROOT_PASS" -e "
 DROP USER IF EXISTS 'replication'@'%';
 CREATE USER 'replication'@'%' IDENTIFIED BY '$REPL_PASS';
-GRANT REPLICATION SLAVE ON *.* TO 'replication'@'%';
+GRANT REPLICATION SLAVE, SLAVE MONITOR ON *.* TO 'replication'@'%';
 FLUSH PRIVILEGES;"
 
 # Configure slave with GTID
 echo -e "\nConfiguring slave..."
 docker exec $SLAVE mariadb -u root -p"$ROOT_PASS" -e "
 STOP SLAVE;
-SET GLOBAL gtid_slave_pos='0-$GTID';
+SET GLOBAL gtid_slave_pos='$GTID';
+RESET SLAVE ALL;
 CHANGE MASTER TO
 MASTER_HOST='$MASTER',
 MASTER_USER='replication',
