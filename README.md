@@ -90,17 +90,3 @@ The script automatically cleans up temporary files (e.g., database dumps) after 
 
 This script is provided under the MIT License. Feel free to modify and distribute it as needed.
 ```
-
----
-
-### Key Points in the README
-
-1. **Purpose**: Clearly explains what the script does.
-2. **Prerequisites**: Lists the requirements for running the script.
-3. **Usage**: Provides step-by-step instructions for running the script.
-4. **Features**: Highlights the key functionalities of the script.
-5. **Example**: Includes a sample output to help users understand what to expect.
-6. **Troubleshooting**: Offers guidance for common issues.
-7. **License**: Specifies the license under which the script is distributed.
-
-This `README` should provide users with all the information they need to use the script effectively. Let me know if you need further adjustments!
